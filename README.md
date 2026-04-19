@@ -2,6 +2,102 @@
 
 修复 Hermes WebUI 无法显示嵌套 Skills 的问题。
 
+## 作用与原理
+
+### 作用
+
+本项目解决了 Hermes WebUI 无法显示深层嵌套目录中 Skills 的问题。修复后，无论 Skills 组织在多少层深的目录中，WebUI 都能正确发现和显示它们。
+
+**修复前：**
+```
+skills/
+├── productivity/
+│   └── markitdown/SKILL.md     ✅ 显示（2层）
+└── mlops/
+    ├── cloud/
+    │   └── modal/SKILL.md      ❌ 不显示（4层）
+    └── training/
+        └── finetune/SKILL.md   ❌ 不显示（4层）
+```
+
+**修复后：**
+```
+所有层级的 Skills 都能正确显示 ✅
+```
+
+### 原理
+
+#### 1. 问题根因
+
+WebUI 后端使用**两层层级扫描**逻辑：
+
+```javascript
+// 原始代码逻辑
+for (category of skillsDir) {        // 第1层：分类
+    for (skill of categoryDir) {     // 第2层：Skill
+        if (has_SKILL_md) add_skill();
+    }
+}
+```
+
+这导致 3 层以上的嵌套目录被忽略。
+
+#### 2. 解决方案核心
+
+将**固定层级扫描**改为**递归深度优先搜索（DFS）**：
+
+```javascript
+async function findSkillsRecursive(dir, disabledList, prefix = '') {
+    for (entry of dir) {
+        if (has_SKILL_md(entry)) {
+            // 找到 Skill，添加到列表
+            skills.push({name, fullName: prefix + entry.name});
+        } else {
+            // 可能是子分类，递归查找
+            skills.push(...await findSkillsRecursive(entry, prefix));
+        }
+    }
+    return skills;
+}
+```
+
+#### 3. 关键实现点
+
+| 组件 | 修改内容 | 目的 |
+|------|----------|------|
+| **递归扫描函数** | `findSkillsRecursive()` | 深度优先遍历所有子目录 |
+| **路径前缀追踪** | `prefix` 参数 | 记录嵌套路径如 `cloud/modal` |
+| **路径兼容层** | `findSkillDir()` | 支持前端请求的简化路径 |
+| **SKILL.md 读取** | 自动补全路径 | 处理 `mlops/modal` → `mlops/cloud/modal` |
+
+#### 4. 数据流
+
+```
+前端请求                    后端处理                      返回结果
+─────────────────────────────────────────────────────────────────
+GET /api/hermes/skills
+                          findSkillsRecursive()
+                          ├─ mlops/
+                          │  ├─ cloud/modal/ ✅
+                          │  └─ training/finetune/ ✅
+                          └─ productivity/
+                             └─ markitdown/ ✅
+                          ───────────────────────────────►
+                          [{name, fullName, description}, ...]
+```
+
+#### 5. 向后兼容
+
+为保持前端代码不变，后端添加路径兼容层：
+
+```javascript
+// 前端请求: /api/hermes/skills/mlops/modal/SKILL.md
+// 实际路径: /api/hermes/skills/mlops/cloud/modal/SKILL.md
+// 兼容层自动查找并返回正确内容
+```
+
+---
+
 ## 问题描述
 
 当 Skills 组织在多层嵌套目录中时（如 `mlops/cloud/modal/`），WebUI 只能扫描两层目录，导致深层 Skills 无法显示。
